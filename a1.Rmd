@@ -1,0 +1,280 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+
+```{r include=FALSE, message=FALSE, warning=FALSE}
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+if (!requireNamespace("org.Hs.eg.db", quietly = TRUE))
+    BiocManager::install("org.Hs.eg.db")
+if (!requireNamespace("knitr", quietly = TRUE))
+    install.packages("knitr")
+if (!requireNamespace("biomaRt", quietly = TRUE))
+    BiocManager::install("biomaRt")
+if (!requireNamespace("edgeR", quietly = TRUE))
+    BiocManager::install("edgeR")
+if (!requireNamespace("dplyr", quietly = TRUE))
+    install.packages("dplyr")
+if (!requireNamespace("ggplot2", quietly = TRUE))
+    install.packages("ggplot2")
+if (!requireNamespace("GEOquery", quietly = TRUE))
+    install.packages("GEOquery")
+
+# packages
+library(edgeR)
+library(limma)
+library(GEOquery)
+library(knitr)
+library(biomaRt)
+library(ggplot2)
+library(dplyr)
+```
+
+# Step 0: Dataset information
+
+```{r, message=FALSE, warning=FALSE}
+gse <- getGEO("GSE149050",GSEMatrix=FALSE)
+```
+
+
+# Step 1: Download the data
+
+```{r, message=FALSE, warning=FALSE}
+suppFiles = GEOquery::getGEOSuppFiles('GSE149050')
+fnames = rownames(suppFiles)
+exprDat = read.delim(fnames[1],header=TRUE,
+                    check.names = FALSE)
+
+```
+
+The dimensions of my dataset are: `r dim(exprDat)`. There are thus 56269 genes and 288 samples in my dataset, ignroing the first column as it just tells us that the rows are gene names.
+
+In my dataset, there are two kinds of samples based on the study description. The first kind of sample is IFNneg and the second kind of sample is IFNpos. IFpos represents presence of interferon response signature and IFneg represents the healthy control group.
+
+Healthy control group: 85
+Systemic lupus erythamtosus (SLE): 203
+
+# Step Two: Quality Control
+
+## 2.1 
+
+First I want to change row names to gene names using first column in dataset.
+
+``` {r, message=FALSE}
+rownames(exprDat) <- exprDat[,1]
+```
+
+## 2.2 Filter out lowly expressed counts
+
+
+In order to filter out lowly expressed counts, I will be using the cpm() function from edgeR. We want at least 1 cpm in the smallest sample size which is 85 (healhy control disease state).
+
+```{r, warning=FALSE}
+
+myCPM <- cpm(exprDat[,2:289])
+# want to get an idea of the CPM in this dataset:
+```
+
+We want to see, of these values, which are greater than 1
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# Which values in myCPM are greater than 1?
+thresh <- myCPM > 1
+# This produces a logical matrix with TRUEs and FALSEs
+
+# we would like to keep genes that have at least 84 TRUES in each row of thresh
+keep <- rowSums(thresh) >= 84
+# Subset the rows of countdata to keep the more highly expressed genes
+counts.keep <- exprDat[keep,2:289]
+summary(keep)
+
+dim(counts.keep)
+
+plot(myCPM[,1],exprDat[,2])
+plot(myCPM[,1],exprDat[,2],ylim=c(0,50),xlim=c(0,3))
+# Add a vertical line at 0.5 CPM
+abline(v=0.5)
+```
+
+
+
+
+Okay so after filtering out for lowly expressed counts, we have filtered out `r dim(exprDat)[1] - dim(counts.keep[1])` genes. Thus, we are left with `r dim(counts.keep[1])` genes.
+
+
+
+
+
+# Step 3: Mapping to HUGO symbols
+
+## 3.1 Finding Ensembl IDS
+
+Looking at the rownames of the data set, it looks like the gene names are not in the form of HUGO symbols. They are instead gene IDS. In order to convert to HUGO symbols, I need to first retrieve the Ensembl IDS. I can do this, using the biomaRt package.
+
+``` {r, warning=FALSE, message=FALSE}
+
+counts.keep$Genes <- rownames(counts.keep)
+Glist <- useMart(biomart="ENSEMBL_MART_ENSEMBL", host="grch37.ensembl.org", path="/biomart/martservice") #from https://support.bioconductor.org/p/62064/
+ensemblGList = useDataset("hsapiens_gene_ensembl",mart=Glist)
+idToEnsembl <- getBM(attributes = c("wikigene_name", "ensembl_gene_id"),
+               filters = c("wikigene_name"),
+               values = counts.keep$Genes,
+               mart = ensemblGList)
+```
+
+Next, I want to know how many of my reads were unable to be mapped to Ensembl IDS. by checking to see how many of the rows were left blank. I can see that `r sum(idToEnsembl$ensembl_gene_id == "")` which is great!
+
+## 3.2 Mapping to HUGO symbols
+
+I will use biomaRt again to do this.
+
+```{r warning=FALSE, message=FALSE}
+colnames(idToEnsembl) <- c("Genes", "ensembl_gene_id")
+counts.keep <- merge(idToEnsembl, counts.keep, by="Genes")
+
+hgncGList <- getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
+                   filters = "ensembl_gene_id",
+                   values = counts.keep$ensembl_gene_id,
+                   mart = ensemblGList)
+
+```
+
+
+Time to check how many hugo symbols were unmapped! `r sum(hgncGList$hgnc_symbol == "")` are unmapped.
+
+I am uncomfortable with removing these unmapped reads as there were 0 unmapped reads to Ensembl IDS.
+
+Additionally, let's see how many hugo symbols were duplicated as this assignment states that we need to remove duplicates.
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+# same this as above but w hgnc symbols instead
+counts.keep.ph <- counts.keep
+counts.keep.ph <- merge(hgncGList, counts.keep.ph, by="ensembl_gene_id")
+
+e <- dplyr::filter(counts.keep.ph, hgnc_symbol == "")
+n_occur <- data.frame(table(counts.keep.ph$hgnc_symbol))
+```
+
+
+`r nrow(counts.keep.ph[counts.keep.ph$hgnc %in% n_occur$Var1[n_occur$Freq > 1],])` were duplicated
+Hmm now I want to check to see how many Ensembl ids may have been duplicated. 
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+n_occur <- data.frame(table(counts.keep.ph$ensembl_gene_id))
+```
+
+
+Okay, so it looks like `r nrow(counts.keep.ph[counts.keep.ph$ensembl_gene_id %in% n_occur$Var1[n_occur$Freq > 1],])` ensembl IDS were duplicated. So it doesn't make sense to me as to why the HUGO ids were duplicated. I don't feel comfortable removing these duplicates as stated in lecture, if the Ensembl ids are unique, duplicated HUGO Ids aren't necessarily imperative to remove. Since we need unique HUGO identifiers, I will make the duplicates unique. First, I have to remove rows that didn't where Ensembl IDS did not map to HUGO identifiers.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+counts.ph <- counts.keep.ph
+counts.ph<- counts.keep.ph[!(counts.keep.ph$hgnc_symbol == ""),]
+```
+
+
+
+Okay so that removed 414 genes. Now, need to make the duplicated HUGO identifiers unique.
+```{r, message=FALSE}
+counts.ph$hgnc_symbol <- make.unique(as.character(counts.ph$hgnc_symbol), sep = "_")
+
+# sanity check:
+
+sum(duplicated(counts.ph$hgnc_symbol)) # equals 0 which is what we're looking for!
+```
+
+
+Now the last step is to make the HUGO ids the row names and remove the Ensembl and hgnc symbol columns from the dataframe!
+
+```{r warning=FALSE, message=FALSE}
+row.names(counts.ph) <- counts.ph$hgnc_symbol
+counts.ph <- counts.ph[, 4:291]
+```
+
+# Step Four: Normalize Data
+
+To normalize the data, I will be using the edgeR package to do this. I have a bit of experience doing quality control with bulk-RNA seq data from my research position and I feel comfortable with using edgeR to perform quality control and normalization.
+
+First, let's see what our pre-normalized data looks like. I will use violin plots to show this
+
+```{r, message=FALSE, warning=FALSE}
+
+log2counts <- log2(cpm(counts.ph))
+
+par(mar=c(1, 1, 1, 1))
+boxplot(log2counts, xlab="Samples", ylab="log2 CPM", las=2, cex=0.5, cex.lab=0.5, cex.xaxis=0.5, main="Unormalized data samples")
+abline(h=median(apply(log2counts, 2, median)), col="blue", lwd=0.8, lty="solid")
+
+```
+
+First we need to create a DGE object.
+
+```{r, message=FALSE, warning=FALSE}
+dge <- DGEList(counts=counts.ph)
+```
+
+## 4.1 Normalizing library sizes
+
+This step is extremely important in normalizing the data as it becomes imperative for when we perform differential analysis (next assignment). If there are a small group of genes that are extremely highly expressed in one of the samples but not the second and these genes take up a significant proportion of the total library size, then the rest of the genes remaining are going to be undersampled so we need to correct for this effect. We can use edgeR's calcNormFactors() function to do this.
+
+
+It is recommended that for most RNA-Seq data, we should use the trimmed mean of M-values between each pair of samples in edgeR's documentation so I will be using this method for my dataset. 
+
+```{r}
+dge <- calcNormFactors(dge,method="TMM")
+```
+
+
+
+So now that the data has been normalized, let's see what the result looks like and how it differs from the un-normalized data
+
+```{r message=FALSE, warning=FALSE}
+normalizedDGE <- cpm(dge)
+log2NormDGE <- log2(normalizedDGE)
+par(mar=c(1, 1, 1, 1))
+boxplot(log2NormDGE, xlab="Samples", ylab="log2 CPM", las=2, cex=0.5, cex.lab=0.5, cex.xaxis=0.5, main="Normalized data samples")
+abline(h=median(apply(log2counts, 2, median)), col="blue", lwd=0.8, lty="solid")
+
+```
+
+
+
+
+
+
+# Final Step: Interpretation
+
+## What are the control and test conditions of the dataset?
+
+In my dataset, there are two kinds of samples based on the study description. The first kind of sample is IFNneg and the second kind of sample is IFNpos. IFpos represents presence of interferon response signature and IFneg represents the healthy control group.
+
+Healthy control group: 85
+Systemic lupus erythamtosus (SLE): 203
+
+
+## Why is the dataset of interest to you?
+
+This year I began working bulk-RNA sequence data. I want to get more comfortable analysing and understanding this type of data. This dataset in particular was of interest to me because I didn't know that women were more likely to develop systemic lupus erythamotosus and I would like to delve into this dataset further to understand why that is exactly.
+
+## Were there expression values that were not unique for specific genes? How did you handle these?
+
+Yes, there were. I decided to leave them in because the Ensembl IDS were unique however, when mapped to the HUGO ids, they were not unique. Since in the original raw data, the gene IDS given were also unique, I didn't feel comfortable taking these genes out.
+
+## Were there expression values that could not be mapped to current HUGO symbols?
+
+Yes there were. I decided to take these out.
+
+## How many outliers were removed?
+
+I didn't remove any outliers for this assignment... I honestly just want to dive into the data more and I may wait until doing the differential expression analysis before deciding to remove outliers.
+
+## How did you handle replicates?
+
+I handled HUGO id replicates by  just making them unique.
+
+## What is the final coverage of your dataset?
+
+The final coverage of my dataset is : `r dim(log2NormDGE)[1]` genes with 288 samples.
