@@ -1,0 +1,64 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, include=FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+if (!requireNamespace("RCurl", quietly = TRUE))
+    install.packages("RCurl")
+
+if (!requireNamespace("GSA", quietly = TRUE))
+    install.packages("GSA")
+
+
+library(RCurl)
+library(GSA)
+
+```
+# Overview of past assignments
+
+# Non-thresholded GSEA
+
+Ok, let's start by performing non-thresholded GSEA. First, we need to get the ranking. I've saved it as an Rds file from Assignment 2 so let's load that first and we can create the .rnk file by extracting the rank information from the object.
+
+
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+
+hits <- readRDS(file="~/BCB420/Bianca_Pokhrel/hits.Rds")
+
+hits$hgnc_symbol <- rownames(hits)
+
+rankinfo <- hits[c("hgnc_symbol", "rank")]
+
+write.table(x=rankinfo,
+            file=file.path("data","rankInfo.rnk"),sep = "\t",
+            row.names = FALSE,col.names = FALSE,quote = FALSE) # save the table to a .rnk file
+```
+
+
+
+```{r warning = FALSE, message = FALSE}
+gmtUrl = "http://download.baderlab.org/EM_Genesets/March_01_2021/Human/symbol/" 
+filenames = getURL(gmtUrl)
+tc = textConnection(filenames)
+contents = readLines(tc)
+close(tc)
+# get the gmt that has all the pathways and does not include terms inferred from
+# electronic annotations(IEA) start with gmt file that has pathways only
+rx = gregexpr("(?<=<a href=\")(.*.GOBP_AllPathways_no_GO_iea.*.)(.gmt)(?=\">)", contents, 
+              perl = TRUE)
+gmtFile = unlist(regmatches(contents, rx))
+dest = paste0(getwd(), "/data/genesets.gmt")
+download.file(paste(gmtUrl, gmtFile, sep = ""), destfile = dest) # save the file
+```
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
