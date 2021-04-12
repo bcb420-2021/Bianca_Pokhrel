@@ -51,6 +51,8 @@ Additionally, normalization and scoring of genes was done to return the top most
 
 # Non-thresholded GSEA
 
+**Please note that to run this analysis, you must also use the "hits.Rds" file**
+
 Ok, let's start by performing non-thresholded GSEA. First, we need to get the ranking. I've saved it as an Rds file from Assignment 2 so let's load that first and we can create the .rnk file by extracting the rank information from the object.
 
 
